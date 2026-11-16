@@ -23,7 +23,7 @@ def get_today_jst_str():
     return now_jst.strftime("%Y%m%d"), now_jst.strftime("%Y-%m-%d")
 
 def fetch_kanpo_pdf_url(date_compact):
-    """本日の官報（本紙 'h'）のPDF URLを公式サイトから探索して取得する"""
+    """本日の官報（本紙）のPDF URLを新サイトの構造に合わせて柔軟に探索して取得する"""
     headers = {"User-Agent": USER_AGENT}
     try:
         res = requests.get(KANPO_TOP_URL, headers=headers, timeout=15)
@@ -32,30 +32,49 @@ def fetch_kanpo_pdf_url(date_compact):
             return None
         
         html = res.text
-        # 本紙（h）のリンクパターンを探す
-        pattern = re.compile(rf'href="(\./{date_compact}/{date_compact}h\d+[^"]+full[^"]*\.html)"')
-        match = pattern.search(html)
-        if not match:
-            print(f"⚠️ 本日 ({date_compact}) の本紙リンクが見つかりませんでした。（※本日は休刊日の可能性があります）")
+        # 本日の日付（例: 20261116）が含まれるすべてのリンクを抽出
+        links = re.findall(rf'href="([^"]*?{date_compact}[^"]*?)"', html)
+        
+        target_url = None
+        for link in links:
+            # 相対パスや絶対パスを適切に結合
+            if link.startswith("./"):
+                full_url = KANPO_BASE_URL + link.replace("./", "")
+            elif link.startswith("/"):
+                full_url = "https://www.kanpo.go.jp" + link
+            elif link.startswith("http"):
+                full_url = link
+            else:
+                full_url = KANPO_BASE_URL + link
+            
+            # 本紙（'h' を含むか、または直接PDFのもの）を優先的にキャッチ
+            if "h" in full_url or full_url.endswith(".pdf"):
+                target_url = full_url
+                break
+        
+        if not target_url:
+            print(f"⚠️ 本日 ({date_compact}) の本紙リンクが見つかりませんでした。")
             return None
         
-        viewer_url = KANPO_BASE_URL + match.group(1).replace("./", "")
+        print(f"🔍 候補URLを発見: {target_url}")
         
-        # ビューアページからPDFの実体URLを特定
-        viewer_res = requests.get(viewer_url, headers=headers, timeout=15)
-        pdf_path_match = re.search(r'["\']([^"\']+\.pdf)["\']', viewer_res.text)
-        if pdf_path_match:
-            raw_path = pdf_path_match.group(1)
-            if raw_path.startswith("http"):
-                return raw_path
-            elif raw_path.startswith("/"):
-                return "https://www.kanpo.go.jp" + raw_path
+        # 取得したURLがHTML（ビューア等）の場合、その中から実際のPDFファイル名を探す
+        if target_url.endswith(".html") or not target_url.endswith(".pdf"):
+            viewer_res = requests.get(target_url, headers=headers, timeout=15)
+            pdf_path_match = re.search(r'["\']([^"\']+\.pdf)["\']', viewer_res.text)
+            if pdf_path_match:
+                raw_path = pdf_path_match.group(1)
+                if raw_path.startswith("http"):
+                    return raw_path
+                elif raw_path.startswith("/"):
+                    return "https://www.kanpo.go.jp" + raw_path
+                else:
+                    base_dir = target_url[:target_url.rfind("/") + 1]
+                    return base_dir + raw_path.replace("./", "")
             else:
-                base_dir = viewer_url[:viewer_url.rfind("/") + 1]
-                return base_dir + raw_path.replace("./", "")
+                return target_url.replace(".html", ".pdf")
         
-        # フォールバック：命名規則から直接生成
-        return viewer_url.replace(".html", ".pdf")
+        return target_url
     except Exception as e:
         print(f"❌ PDF URLの解決中にエラーが発生しました: {e}")
         return None
