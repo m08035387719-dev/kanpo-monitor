@@ -3,6 +3,7 @@ import json
 import tempfile
 import datetime
 import requests
+import re
 import fitz  # PyMuPDF
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -32,11 +33,10 @@ def fetch_kanpo_pdf_url(date_compact):
         
         html = res.text
         # 本紙（h）のリンクパターンを探す
-        import re
         pattern = re.compile(rf'href="(\./{date_compact}/{date_compact}h\d+[^"]+full[^"]*\.html)"')
         match = pattern.search(html)
         if not match:
-            print(f"⚠️ 本日 ({date_compact}) の本紙リンクが見つかりませんでした。")
+            print(f"⚠️ 本日 ({date_compact}) の本紙リンクが見つかりませんでした。（※休刊日の可能性があります）")
             return None
         
         viewer_url = KANPO_BASE_URL + match.group(1).replace("./", "")
@@ -51,7 +51,9 @@ def fetch_kanpo_pdf_url(date_compact):
             elif raw_path.startswith("/"):
                 return "https://www.kanpo.go.jp" + raw_path
             else:
-                return viewer_url.substring(0, viewer_url.lastIndexOf("/") + 1) + raw_path.replace("./", "")
+                # 修正：Pythonのスライス構文でディレクトリ部分を切り出す
+                base_dir = viewer_url[:viewer_url.rfind("/") + 1]
+                return base_dir + raw_path.replace("./", "")
         
         # フォールバック：命名規則から直接生成
         return viewer_url.replace(".html", ".pdf")
@@ -113,7 +115,6 @@ def main():
 
         for page_num in range(total_pages):
             page = doc.load_page(page_num)
-            # 鮮明なOCRのために解像度を高め（ZOOM = 2, 約150〜200dpi相当）に設定
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
             
             img_name = f"kanpo_{date_compact}_p{page_num + 1:03d}.jpg"
