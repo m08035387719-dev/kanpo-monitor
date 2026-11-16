@@ -2,9 +2,8 @@ name: Kanpo Daily Image Converter
 
 on:
   schedule:
-    # 毎日 UTC 0:00（日本時間 午前9:00）に自動実行
-    - cron: '0 0 * * *'
-  workflow_dispatch: # 手動でもいつでも実行可能
+    - cron: '30 0 * * *' # 毎日日本時間 9:30 AM 頃
+  workflow_dispatch:
 
 jobs:
   convert-kanpo:
@@ -21,11 +20,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests pymupdf google-api-python-client google-auth-oauthlib
 
       - name: Run Python Converter Script
         env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-          GOOGLE_DRIVE_FOLDER_ID: "ここにGoogleドライブの保存先フォルダIDを貼り付けてください"
-        run: |
-          python convert_kanpo.py
+          GCP_CLIENT_ID: ${{ secrets.GCP_CLIENT_ID }}
+          GCP_CLIENT_SECRET: ${{ secrets.GCP_CLIENT_SECRET }}
+          GCP_REFRESH_TOKEN: ${{ secrets.GCP_REFRESH_TOKEN }}
+        run: python convert_kanpo.py
