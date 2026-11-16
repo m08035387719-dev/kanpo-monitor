@@ -4,6 +4,7 @@ import tempfile
 import datetime
 import requests
 import re
+import traceback
 import fitz  # PyMuPDF
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -21,19 +22,19 @@ def get_today_jst_str():
     return now_jst.strftime("%Y%m%d"), now_jst.strftime("%Y-%m-%d")
 
 def fetch_kanpo_pdf_url(date_compact):
-    """フルコンテンツHTMLページ（full...html）経由で正確なPDFリンクを取得する"""
     headers = {"User-Agent": USER_AGENT}
     try:
         res = requests.get(KANPO_TOP_URL, headers=headers, timeout=15)
+        print(f"トップページ取得 HTTPステータス: {res.status_code}")
         if res.status_code != 200:
-            print(f"❌ 官報トップページの取得に失敗しました: HTTP {res.status_code}")
             return None
         
         html = res.text
         
-        # 本紙のフルコンテンツHTML（例: 20261116h01829full...html）を探索する
+        # 本紙のフルコンテンツHTMLリンクを探索
         pattern = re.compile(rf'href="([^"]*?{date_compact}h\d+[^"]*?full[^"]*?\.html)"')
         matches = pattern.findall(html)
+        print(f"見つまったフルコンテンツHTML候補数: {len(matches)}")
         
         full_html_url = None
         for path in matches:
@@ -46,39 +47,39 @@ def fetch_kanpo_pdf_url(date_compact):
             break
             
         if not full_html_url:
-            print(f"⚠️ 本日 ({date_compact}) のフルコンテンツHTMLリンクが見つかりませんでした。")
+            print("⚠️ フルコンテンツHTMLリンクが見つかりませんでした。")
             return None
             
-        print(f"🔍 発見したフルコンテンツHTML: {full_html_url}")
+        print(f"🔍 ターゲットHTML: {full_html_url}")
         
-        # 該当のHTMLページにアクセスする
         v_res = requests.get(full_html_url, headers=headers, timeout=15)
+        print(f"ターゲットHTML取得 HTTPステータス: {v_res.status_code}")
         if v_res.status_code != 200:
-            print(f"❌ フルコンテンツHTMLの取得に失敗しました: HTTP {v_res.status_code}")
             return None
             
-        # HTML内から実際のPDFファイルへのリンクを抽出
+        # HTML内からPDFリンクを抽出
         pdf_match = re.search(r'["\']([^"\']+\.pdf)["\']', v_res.text, re.IGNORECASE)
         if pdf_match:
             raw_pdf = pdf_match.group(1)
+            print(f"📄 抽出されたPDFパス: {raw_pdf}")
             if raw_pdf.startswith("http"):
                 return raw_pdf
             elif raw_pdf.startswith("/"):
                 return "https://www.kanpo.go.jp" + raw_pdf
             else:
-                # HTMLの場所を基準にPDFの絶対パスを組み立てる
                 base_dir = full_html_url[:full_html_url.rfind("/") + 1]
                 return base_dir + raw_pdf.replace("./", "")
         else:
-            # 見つからない場合のフォールバック（HTMLの拡張子を.pdfに置換）
-            return full_html_url.replace(".html", ".pdf")
+            fallback_url = full_html_url.replace(".html", ".pdf")
+            print(f"⚠️ PDF直接リンクが見つからないためフォールバック: {fallback_url}")
+            return fallback_url
 
     except Exception as e:
-        print(f"❌ PDF URLの解決中にエラーが発生しました: {e}")
+        print(f"❌ 予期せぬエラーが発生しました:")
+        traceback.print_exc()
         return None
 
 def upload_to_drive(service, file_path, file_name, folder_id):
-    """Googleドライブの指定フォルダにファイルをアップロードする"""
     file_metadata = {
         'name': file_name,
         'parents': [folder_id]
@@ -95,7 +96,6 @@ def main():
     date_compact, date_hyphen = get_today_jst_str()
     print(f"=== 官報画像化処理開始: {date_hyphen} ===")
 
-    # 1. Google Drive API の認証設定
     sa_key_json = os.environ.get("GCP_SA_KEY")
     if not sa_key_json:
         raise ValueError("❌ 環境変数 GCP_SA_KEY が設定されていません。")
@@ -106,20 +106,19 @@ def main():
     )
     drive_service = build('drive', 'v3', credentials=credentials)
 
-    # 2. 本日の官報PDF URLの取得
     pdf_url = fetch_kanpo_pdf_url(date_compact)
     if not pdf_url:
-        print("本日の官報は発行されていないか、取得できませんでした。処理を正常終了します。")
+        print("PDF URLの取得に失敗したため終了します。")
         return
 
     print(f"📥 官報PDFを取得中: {pdf_url}")
     headers = {"User-Agent": USER_AGENT}
     pdf_res = requests.get(pdf_url, headers=headers, timeout=30)
+    print(f"PDFダウンロード HTTPステータス: {pdf_res.status_code}")
     if pdf_res.status_code != 200:
         print(f"❌ PDFのダウンロードに失敗しました: HTTP {pdf_res.status_code}")
         return
 
-    # 3. 一時ディレクトリでPDFを読み込み、全ページをJPEG化してドライブへアップロード
     with tempfile.TemporaryDirectory() as tmpdir:
         pdf_path = os.path.join(tmpdir, "kanpo.pdf")
         with open(pdf_path, "wb") as f:
