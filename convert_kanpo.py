@@ -1,19 +1,17 @@
 import os
-import json
 import tempfile
 import datetime
 import requests
 import re
 import traceback
 import fitz  # PyMuPDF
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 # --- 設定項目 ---
 DRIVE_FOLDER_ID = "1Lle6cIKDuGGpABKMh9gy_iegRAlWX7pI"
 KANPO_TOP_URL = "https://www.kanpo.go.jp/index.html"
-KANPO_BASE_URL = "https://www.kanpo.go.jp/"
 USER_AGENT = "KanpoImageBot/1.0 (credit monitoring)"
 
 def get_today_jst_str():
@@ -25,16 +23,12 @@ def fetch_kanpo_pdf_url(date_compact):
     headers = {"User-Agent": USER_AGENT}
     try:
         res = requests.get(KANPO_TOP_URL, headers=headers, timeout=15)
-        print(f"トップページ取得 HTTPステータス: {res.status_code}")
         if res.status_code != 200:
             return None
         
         html = res.text
-        
-        # 本紙のフルコンテンツHTMLリンクを探索
         pattern = re.compile(rf'href="([^"]*?{date_compact}h\d+[^"]*?full[^"]*?\.html)"')
         matches = pattern.findall(html)
-        print(f"見つまったフルコンテンツHTML候補数: {len(matches)}")
         
         full_html_url = None
         for path in matches:
@@ -43,25 +37,20 @@ def fetch_kanpo_pdf_url(date_compact):
             elif path.startswith("/"):
                 full_html_url = "https://www.kanpo.go.jp" + path
             else:
-                full_html_url = KANPO_BASE_URL + path.replace("./", "")
+                full_html_url = "https://www.kanpo.go.jp/" + path.replace("./", "")
             break
             
         if not full_html_url:
             print("⚠️ フルコンテンツHTMLリンクが見つかりませんでした。")
             return None
             
-        print(f"🔍 ターゲットHTML: {full_html_url}")
-        
         v_res = requests.get(full_html_url, headers=headers, timeout=15)
-        print(f"ターゲットHTML取得 HTTPステータス: {v_res.status_code}")
         if v_res.status_code != 200:
             return None
             
-        # HTML内からPDFリンクを抽出
         pdf_match = re.search(r'["\']([^"\']+\.pdf)["\']', v_res.text, re.IGNORECASE)
         if pdf_match:
             raw_pdf = pdf_match.group(1)
-            print(f"📄 抽出されたPDFパス: {raw_pdf}")
             if raw_pdf.startswith("http"):
                 return raw_pdf
             elif raw_pdf.startswith("/"):
@@ -70,12 +59,10 @@ def fetch_kanpo_pdf_url(date_compact):
                 base_dir = full_html_url[:full_html_url.rfind("/") + 1]
                 return base_dir + raw_pdf.replace("./", "")
         else:
-            fallback_url = full_html_url.replace(".html", ".pdf")
-            print(f"⚠️ PDF直接リンクが見つからないためフォールバック: {fallback_url}")
-            return fallback_url
+            return full_html_url.replace(".html", ".pdf")
 
     except Exception as e:
-        print(f"❌ 予期せぬエラーが発生しました:")
+        print(f"❌ エラーが発生しました:")
         traceback.print_exc()
         return None
 
@@ -96,13 +83,21 @@ def main():
     date_compact, date_hyphen = get_today_jst_str()
     print(f"=== 官報画像化処理開始: {date_hyphen} ===")
 
-    sa_key_json = os.environ.get("GCP_SA_KEY")
-    if not sa_key_json:
-        raise ValueError("❌ 環境変数 GCP_SA_KEY が設定されていません。")
-    
-    sa_info = json.loads(sa_key_json)
-    credentials = service_account.Credentials.from_service_account_info(
-        sa_info, scopes=['https://www.googleapis.com/auth/drive']
+    # OAuth 2.0 認証情報の復元（リフレッシュトークンを使用）
+    client_id = os.environ.get("GCP_CLIENT_ID")
+    client_secret = os.environ.get("GCP_CLIENT_SECRET")
+    refresh_token = os.environ.get("GCP_REFRESH_TOKEN")
+
+    if not all([client_id, client_secret, refresh_token]):
+        raise ValueError("❌ 必要なOAuth環境変数が設定されていません。")
+
+    credentials = Credentials(
+        None,
+        refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=['https://www.googleapis.com/auth/drive']
     )
     drive_service = build('drive', 'v3', credentials=credentials)
 
@@ -114,7 +109,6 @@ def main():
     print(f"📥 官報PDFを取得中: {pdf_url}")
     headers = {"User-Agent": USER_AGENT}
     pdf_res = requests.get(pdf_url, headers=headers, timeout=30)
-    print(f"PDFダウンロード HTTPステータス: {pdf_res.status_code}")
     if pdf_res.status_code != 200:
         print(f"❌ PDFのダウンロードに失敗しました: HTTP {pdf_res.status_code}")
         return
