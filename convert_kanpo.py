@@ -12,6 +12,7 @@ from googleapiclient.http import MediaFileUpload
 # --- 設定項目 ---
 DRIVE_FOLDER_ID = "1Lle6cIKDuGGpABKMh9gy_iegRAlWX7pI"
 KANPO_TOP_URL = "https://www.kanpo.go.jp/index.html"
+KANPO_BASE_URL = "https://www.kanpo.go.jp/"
 USER_AGENT = "KanpoImageBot/1.0 (credit monitoring)"
 
 def get_today_jst_str():
@@ -20,7 +21,7 @@ def get_today_jst_str():
     return now_jst.strftime("%Y%m%d"), now_jst.strftime("%Y-%m-%d")
 
 def fetch_kanpo_pdf_url(date_compact):
-    """本日の官報PDFのURLを直接安全に取得する"""
+    """本日の官報（本紙 'h' + 号数）のURLを正確に探索して取得する"""
     headers = {"User-Agent": USER_AGENT}
     try:
         res = requests.get(KANPO_TOP_URL, headers=headers, timeout=15)
@@ -29,30 +30,35 @@ def fetch_kanpo_pdf_url(date_compact):
             return None
         
         html = res.text
-        # 本日の日付が含まれるPDFファイルへのリンクを直接探す
-        pdf_matches = re.findall(rf'href="([^"]*?{date_compact}[^"]*?\.pdf)"', html)
-        if pdf_matches:
-            path = pdf_matches[0]
-            if path.startswith("http"):
-                return path
-            elif path.startswith("/"):
-                return "https://www.kanpo.go.jp" + path
-            else:
-                return "https://www.kanpo.go.jp/" + path.replace("./", "")
-
-        # 見つからない場合はビューアページ（.html）経由で探す
-        html_matches = re.findall(rf'href="([^"]*?{date_compact}[^"]*?\.html)"', html)
-        if html_matches:
-            viewer_path = html_matches[0]
-            if viewer_path.startswith("http"):
-                viewer_url = viewer_path
-            elif viewer_path.startswith("/"):
-                viewer_url = "https://www.kanpo.go.jp" + viewer_path
-            else:
-                viewer_url = "https://www.kanpo.go.jp/" + viewer_path.replace("./", "")
+        
+        # 1. 本紙（h + 数字）が含まれるリンクやパスを最優先で探す（例: 20261116h01829）
+        # 例: href="./20261116/20261116h01829/..."
+        pattern = re.compile(rf'href="([^"]*?{date_compact}h\d+[^"]*?)"')
+        matches = pattern.findall(html)
+        
+        target_url = None
+        for path in matches:
+            # `.fullcontents.html` は除外して本紙の個別ページ・PDFを狙う
+            if "fullcontents" in path:
+                continue
             
-            print(f"🔍 ビューアURLを確認中: {viewer_url}")
-            v_res = requests.get(viewer_url, headers=headers, timeout=15)
+            if path.startswith("http"):
+                target_url = path
+            elif path.startswith("/"):
+                target_url = "https://www.kanpo.go.jp" + path
+            else:
+                target_url = KANPO_BASE_URL + path.replace("./", "")
+            break
+            
+        if not target_url:
+            print(f"⚠️ 本日 ({date_compact}) の本紙（h）リンクが見つかりませんでした。")
+            return None
+            
+        print(f"🔍 発見した本紙ターゲットURL: {target_url}")
+        
+        # 2. 取得したURLがPDF直リンクでない場合（HTMLビューアの場合）、その中から実際のPDFファイル名を探す
+        if target_url.endswith(".html") or not target_url.endswith(".pdf"):
+            v_res = requests.get(target_url, headers=headers, timeout=15)
             pdf_match = re.search(r'["\']([^"\']+\.pdf)["\']', v_res.text)
             if pdf_match:
                 raw_pdf = pdf_match.group(1)
@@ -61,11 +67,13 @@ def fetch_kanpo_pdf_url(date_compact):
                 elif raw_pdf.startswith("/"):
                     return "https://www.kanpo.go.jp" + raw_pdf
                 else:
-                    base_dir = viewer_url[:viewer_url.rfind("/") + 1]
+                    base_dir = target_url[:target_url.rfind("/") + 1]
                     return base_dir + raw_pdf.replace("./", "")
-                    
-        print(f"⚠️ 本日 ({date_compact}) のPDFリンクが見つかりませんでした。")
-        return None
+            else:
+                # フォールバック：命名規則からPDFを推測
+                return target_url.replace(".html", ".pdf")
+                
+        return target_url
     except Exception as e:
         print(f"❌ PDF URLの解決中にエラーが発生しました: {e}")
         return None
