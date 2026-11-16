@@ -10,8 +10,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 # --- 設定項目 ---
-# Googleドライブの共有先フォルダID（ドライブのURLの /folders/ 以降の文字列）
-DRIVE_FOLDER_ID = os.environ.get("1Lle6cIKDuGGpABKMh9gy_iegRAlWX7pI", "ここにGoogleドライブのフォルダIDを設定")
+# Googleドライブの共有先フォルダIDを直接指定
+DRIVE_FOLDER_ID = "1Lle6cIKDuGGpABKMh9gy_iegRAlWX7pI"
 KANPO_TOP_URL = "https://www.kanpo.go.jp/index.html"
 KANPO_BASE_URL = "https://www.kanpo.go.jp/"
 USER_AGENT = "KanpoImageBot/1.0 (credit monitoring)"
@@ -36,7 +36,7 @@ def fetch_kanpo_pdf_url(date_compact):
         pattern = re.compile(rf'href="(\./{date_compact}/{date_compact}h\d+[^"]+full[^"]*\.html)"')
         match = pattern.search(html)
         if not match:
-            print(f"⚠️ 本日 ({date_compact}) の本紙リンクが見つかりませんでした。（※休刊日の可能性があります）")
+            print(f"⚠️ 本日 ({date_compact}) の本紙リンクが見つかりませんでした。（※本日は休刊日の可能性があります）")
             return None
         
         viewer_url = KANPO_BASE_URL + match.group(1).replace("./", "")
@@ -51,7 +51,6 @@ def fetch_kanpo_pdf_url(date_compact):
             elif raw_path.startswith("/"):
                 return "https://www.kanpo.go.jp" + raw_path
             else:
-                # 修正：Pythonのスライス構文でディレクトリ部分を切り出す
                 base_dir = viewer_url[:viewer_url.rfind("/") + 1]
                 return base_dir + raw_path.replace("./", "")
         
@@ -93,7 +92,7 @@ def main():
     # 2. 本日の官報PDF URLの取得
     pdf_url = fetch_kanpo_pdf_url(date_compact)
     if not pdf_url:
-        print("本日の官報は発行されていないか、取得できませんでした。処理を終了します。")
+        print("本日の官報は発行されていないか、取得できませんでした。処理を正常終了します。")
         return
 
     print(f"📥 官報PDFを取得中: {pdf_url}")
@@ -128,4 +127,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
