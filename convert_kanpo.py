@@ -11,7 +11,7 @@ from googleapiclient.http import MediaFileUpload
 
 # --- 設定項目 ---
 # Googleドライブの共有先フォルダID（ドライブのURLの /folders/ 以降の文字列）
-DRIVE_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "ここにGoogleドライブのフォルダIDを設定")
+DRIVE_FOLDER_ID = os.environ.get("1Lle6cIKDuGGpABKMh9gy_iegRAlWX7pI", "ここにGoogleドライブのフォルダIDを設定")
 KANPO_TOP_URL = "https://www.kanpo.go.jp/index.html"
 KANPO_BASE_URL = "https://www.kanpo.go.jp/"
 USER_AGENT = "KanpoImageBot/1.0 (credit monitoring)"
