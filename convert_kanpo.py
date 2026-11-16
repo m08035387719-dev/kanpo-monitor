@@ -21,7 +21,7 @@ def get_today_jst_str():
     return now_jst.strftime("%Y%m%d"), now_jst.strftime("%Y-%m-%d")
 
 def fetch_kanpo_pdf_url(date_compact):
-    """本日の官報（本紙 'h' + 号数）のURLを正確に探索して取得する"""
+    """HTMLページ内から確実に実体のPDFリンクを抽出して取得する"""
     headers = {"User-Agent": USER_AGENT}
     try:
         res = requests.get(KANPO_TOP_URL, headers=headers, timeout=15)
@@ -31,14 +31,12 @@ def fetch_kanpo_pdf_url(date_compact):
         
         html = res.text
         
-        # 1. 本紙（h + 数字）が含まれるリンクやパスを最優先で探す（例: 20261116h01829）
-        # 例: href="./20261116/20261116h01829/..."
+        # 1. 本紙（h + 数字）が含まれるHTML（またはPDF）のリンクを探す
         pattern = re.compile(rf'href="([^"]*?{date_compact}h\d+[^"]*?)"')
         matches = pattern.findall(html)
         
         target_url = None
         for path in matches:
-            # `.fullcontents.html` は除外して本紙の個別ページ・PDFを狙う
             if "fullcontents" in path:
                 continue
             
@@ -51,29 +49,40 @@ def fetch_kanpo_pdf_url(date_compact):
             break
             
         if not target_url:
-            print(f"⚠️ 本日 ({date_compact}) の本紙（h）リンクが見つかりませんでした。")
+            print(f"⚠️ 本日 ({date_compact}) の本紙リンクが見つかりませんでした。")
             return None
             
-        print(f"🔍 発見した本紙ターゲットURL: {target_url}")
+        print(f"🔍 ターゲットURL: {target_url}")
         
-        # 2. 取得したURLがPDF直リンクでない場合（HTMLビューアの場合）、その中から実際のPDFファイル名を探す
-        if target_url.endswith(".html") or not target_url.endswith(".pdf"):
-            v_res = requests.get(target_url, headers=headers, timeout=15)
-            pdf_match = re.search(r'["\']([^"\']+\.pdf)["\']', v_res.text)
-            if pdf_match:
-                raw_pdf = pdf_match.group(1)
-                if raw_pdf.startswith("http"):
-                    return raw_pdf
-                elif raw_pdf.startswith("/"):
-                    return "https://www.kanpo.go.jp" + raw_pdf
-                else:
-                    base_dir = target_url[:target_url.rfind("/") + 1]
-                    return base_dir + raw_pdf.replace("./", "")
+        # 2. もしPDF直接ではなくHTMLページの場合、そのHTML内から `.pdf` のリンクをすべて洗い出す
+        if target_url.endswith(".pdf"):
+            return target_url
+            
+        v_res = requests.get(target_url, headers=headers, timeout=15)
+        # HTML内のすべての href="..." や src="..." から .pdf を含むものを探す
+        pdf_candidates = re.findall(r'(?:href|src)=["\']([^"\']+\.pdf)["\']', v_res.text, re.IGNORECASE)
+        
+        if pdf_candidates:
+            # 見つかった候補の中から最初の有効なPDFリンクを組み立てる
+            raw_pdf = pdf_candidates[0]
+            if raw_pdf.startswith("http"):
+                return raw_pdf
+            elif raw_pdf.startswith("/"):
+                return "https://www.kanpo.go.jp" + raw_pdf
             else:
-                # フォールバック：命名規則からPDFを推測
-                return target_url.replace(".html", ".pdf")
-                
-        return target_url
+                # 基準となるディレクトリからの相対パスを結合
+                base_dir = target_url[:target_url.rfind("/") + 1]
+                return base_dir + raw_pdf.replace("./", "")
+        
+        # それでも見つからない場合のフォールバック（号数全体のPDF等を探す）
+        alt_pdf_match = re.search(r'href="([^"]*?\.pdf)"', v_res.text)
+        if alt_pdf_match:
+            raw_pdf = alt_pdf_match.group(1)
+            base_dir = target_url[:target_url.rfind("/") + 1]
+            return base_dir + raw_pdf.replace("./", "")
+
+        print("❌ HTML内からPDFのダウンロードリンクを特定できませんでした。")
+        return None
     except Exception as e:
         print(f"❌ PDF URLの解決中にエラーが発生しました: {e}")
         return None
